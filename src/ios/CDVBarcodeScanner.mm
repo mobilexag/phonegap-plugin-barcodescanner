@@ -47,7 +47,7 @@
 //------------------------------------------------------------------------------
 // class that does the grunt work
 //------------------------------------------------------------------------------
-@interface CDVbcsProcessor : NSObject <AVCaptureMetadataOutputObjectsDelegate> {}
+@interface CDVbcsProcessor : NSObject <AVCaptureMetadataOutputObjectsDelegate, UIAdaptivePresentationControllerDelegate> {}
 @property (nonatomic, retain) CDVBarcodeScanner*           plugin;
 @property (nonatomic, retain) NSString*                   callback;
 @property (nonatomic, retain) UIViewController*           parentViewController;
@@ -358,6 +358,11 @@ parentViewController:(UIViewController*)parentViewController
 
 //--------------------------------------------------------------------------
 - (void)openDialog {
+    // Since iOS 13, the default modal presentation style is a page sheet that the user can dismiss by swiping down.
+    // Handle that dismissal like a cancellation, so the capture session stops and the callback fires.
+    if (@available(iOS 13.0, *)) {
+        self.viewController.presentationController.delegate = self;
+    }
     [self.parentViewController
      presentViewController:self.viewController
      animated:self.isTransitionAnimated completion:nil
@@ -366,10 +371,16 @@ parentViewController:(UIViewController*)parentViewController
 
 //--------------------------------------------------------------------------
 - (void)barcodeScanDone:(void (^)(void))callbackBlock {
+    [self stopCapture];
+    [self.parentViewController dismissViewControllerAnimated:self.isTransitionAnimated completion:callbackBlock];
+}
+
+//--------------------------------------------------------------------------
+// Stops the capture session and releases the view controller.
+// Shared by every way the scanner can be closed (scan result, cancel, flip, swipe down).
+- (void)stopCapture {
     self.capturing = NO;
     [self.captureSession stopRunning];
-    [self.parentViewController dismissViewControllerAnimated:self.isTransitionAnimated completion:callbackBlock];
-
 
     AVCaptureDevice *device = [AVCaptureDevice defaultDeviceWithMediaType:AVMediaTypeVideo];
     [device lockForConfiguration:nil];
@@ -438,6 +449,16 @@ parentViewController:(UIViewController*)parentViewController
     } else {
         dispatch_sync(dispatch_get_main_queue(), block);
     }
+}
+
+//--------------------------------------------------------------------------
+// Called after the user dismissed the page sheet by swiping down.
+// The view controller is already gone, so we must not call barcodeScanDone (its
+// dismissViewControllerAnimated would dismiss the parent view controller). Otherwise same as cancel.
+- (void)presentationControllerDidDismiss:(UIPresentationController*)presentationController API_AVAILABLE(ios(13.0)) {
+    [self stopCapture];
+    [self.plugin returnSuccess:@"" format:@"" cancelled:TRUE flipped:self.isFlipped callback:self.callback];
+    self.isFlipped = NO;
 }
 
 //--------------------------------------------------------------------------
